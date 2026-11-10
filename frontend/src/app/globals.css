@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Manrope', sans-serif;
+  overflow-x: hidden;
+}
+
+.heading-serif {
+  font-family: 'Fraunces', serif;
+}
+
+/* Custom Scrollbar for a premium feel */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #FDF8EE;
+}
+::-webkit-scrollbar-thumb {
+  background: #10893E;
+  border-radius: 4px;
+}
