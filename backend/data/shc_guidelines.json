@@ -1,0 +1,23 @@
+{
+    "source": "Soil Health Card (SHC) Simulated Baselines",
+    "macronutrients": {
+        "Nitrogen_N": {
+            "critical_min": 50,
+            "deficiency_alert": "Nitrogen is critically low (< 50). Consider immediate application of Urea to boost vegetative growth."
+        },
+        "Phosphorus_P": {
+            "critical_min": 20,
+            "deficiency_alert": "Phosphorus is deficient (< 20). Root development may be stunted. Apply DAP fertilizer."
+        },
+        "Potassium_K": {
+            "critical_min": 20,
+            "deficiency_alert": "Potassium is low (< 20). Crop stress tolerance is compromised. Apply MOP (Muriate of Potash)."
+        }
+    },
+    "climate": {
+        "Temperature_C": {
+            "heat_stress_threshold": 35,
+            "stress_alert": "High heat stress detected (> 35°C). Ensure adequate and frequent irrigation to prevent crop wilting."
+        }
+    }
+}

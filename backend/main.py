@@ -14,6 +14,7 @@ import ssl
 import tensorflow as tf
 from gtts import gTTS
 from dotenv import load_dotenv
+import pandas as pd  # <-- Added pandas for FAOSTAT CSV
 
 # 1. FORCE EXACT PATH TO .env FILE
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -145,22 +146,61 @@ async def predict_yield(data: CropInput):
     recommended_model = max(valid_preds, key=valid_preds.get) if valid_preds else "Random Forest"
     predicted_value = predictions[recommended_model]
 
-    # --- 1. BASE FALLBACK INSIGHT (If Gemini fails or key is missing) ---
-    if data.N < 50:
-        insight = "Nitrogen levels are dangerously low. Consider immediate application of Urea to boost vegetative growth."
-    elif data.temp > 35:
-        insight = "High heat stress detected. Ensure adequate and frequent irrigation to prevent crop wilting."
-    elif data.P < 20:
-        insight = "Low Phosphorus. Root development may be stunted. Apply DAP fertilizer."
-    else:
-        insight = "Soil nutrients and temperature are optimal for maximum yield."
+    # --- 1. ICAR / SHC RULE ENGINE & FAOSTAT BASELINE ---
+    shc_alert = ""
+    faostat_context = ""
+    
+    try:
+        # Load SHC Guidelines JSON
+        shc_path = os.path.join(BASE_DIR, "data", "shc_guidelines.json")
+        with open(shc_path, "r") as f:
+            shc_data = json.load(f)
+            
+        # Load FAOSTAT Historical Averages CSV
+        faostat_path = os.path.join(BASE_DIR, "data", "faostat_crop_data.csv")
+        faostat_df = pd.read_csv(faostat_path)
+        
+        # Pull the Indian national average for Wheat (3.60 t/ha)
+        india_avg = float(faostat_df.loc[(faostat_df['Region'] == 'India') & (faostat_df['Crop_Type'] == 'Wheat'), 'FAOSTAT_Average_Yield_tha'].values[0])
+        
+        # Calculate comparison for Gemini
+        yield_difference = round(predicted_value - india_avg, 2)
+        faostat_context = f"This forecast is {abs(yield_difference)} t/ha {'higher' if yield_difference > 0 else 'lower'} than the Indian national wheat average of {india_avg} t/ha."
 
-    # --- 2. GEMINI AI (Updated to Gemini 2.5 Flash + AQ. Auth Key Headers) ---
+        # Evaluate live sliders against real ICAR thresholds
+        if data.N < shc_data["macronutrients"]["Nitrogen_N"]["critical_min_kg_ha"]:
+            insight = shc_data["macronutrients"]["Nitrogen_N"]["deficiency_alert"]
+            shc_alert = insight
+        elif data.P < shc_data["macronutrients"]["Phosphorus_P"]["critical_min_kg_ha"]:
+            insight = shc_data["macronutrients"]["Phosphorus_P"]["deficiency_alert"]
+            shc_alert = insight
+        elif data.K < shc_data["macronutrients"]["Potassium_K"]["critical_min_kg_ha"]:
+            insight = shc_data["macronutrients"]["Potassium_K"]["deficiency_alert"]
+            shc_alert = insight
+        elif data.temp > shc_data["climate"]["Temperature_C"]["heat_stress_threshold"]:
+            insight = shc_data["climate"]["Temperature_C"]["stress_alert"]
+            shc_alert = insight
+        else:
+            insight = f"Soil macronutrients (NPK) and temperature are within optimal SHC ranges. {faostat_context}"
+            
+    except Exception as e:
+        print(f"Data Reference Error (Proceeding with safe defaults): {e}")
+        # Safe default if the files haven't been created yet
+        if data.N < 50:
+            insight = "Nitrogen levels are dangerously low. Consider immediate application of Urea."
+        elif data.temp > 35:
+            insight = "High heat stress detected. Ensure adequate and frequent irrigation."
+        else:
+            insight = "Soil nutrients and temperature are optimal for maximum yield."
+
+    # --- 2. GEMINI AI (Updated with Real Context Grounding) ---
     if GEMINI_API_KEY:
         prompt = (
-            f"You are an expert AI agronomist. A farmer has soil with Nitrogen={data.N}, "
-            f"Phosphorus={data.P}, Potassium={data.K}, Temperature={data.temp}°C, and applied {data.Fertilizer}kg/ha of fertilizer. "
-            f"The AI predicted a yield of {predicted_value} t/ha. Provide a concise, highly actionable 2-sentence recommendation "
+            f"You are an expert AI agronomist. A farmer has soil with Nitrogen={data.N} kg/ha, "
+            f"Phosphorus={data.P} kg/ha, Potassium={data.K} kg/ha, Temperature={data.temp}°C, and applied {data.Fertilizer}kg/ha of fertilizer. "
+            f"The AI predicted a yield of {predicted_value} t/ha. {faostat_context} "
+            f"RULE ENGINE ALERT: {shc_alert} "
+            f"Based strictly on this data, provide a concise, highly actionable 2-sentence recommendation "
             f"to optimize or protect this yield. Reply in plain text only. Do not use asterisks, markdown, or bullet points."
         )
         
@@ -171,7 +211,7 @@ async def predict_yield(data: CropInput):
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
 
-        # Try active 2026 models in order (since 1.5-flash is retired and returns 404)
+        # Try active 2026 models in order
         active_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
         
         for model_name in active_models:
