@@ -1,0 +1,7 @@
+node_modules/
+.next/
+venv/
+.env
+backend/.env
+backend/audio_cache/
+__pycache__/
