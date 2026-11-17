@@ -1,13 +1,10 @@
 import axios from 'axios';
 
-// Ensure the URL is clean and absolute
-let apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
-// Remove any accidental trailing slashes or quotes
-apiUrl = apiUrl.replace(/\/+$/, '').replace(/['"]+/g, '').trim();
+// Bypassing Vercel env variables to guarantee a clean connection
+const API_URL = 'https://p26-yeild-optimizer-1.onrender.com';
 
 export const api = axios.create({
-  baseURL: apiUrl,
+  baseURL: API_URL,
   headers: {
     'Content-Type': 'application/json',
   },
