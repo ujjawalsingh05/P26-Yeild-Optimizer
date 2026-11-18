@@ -4,4 +4,4 @@ venv/
 .env
 backend/.env
 backend/audio_cache/
-__pycache__/
+__pycache__/backend/.env

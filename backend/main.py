@@ -23,12 +23,17 @@ load_dotenv(dotenv_path=env_path)
 raw_key = os.getenv("GEMINI_API_KEY", "")
 GEMINI_API_KEY = raw_key.strip().strip('"').strip("'")
 
+if GEMINI_API_KEY:
+    print(f"✅ Gemini API Key Loaded Successfully! (Starts with: {GEMINI_API_KEY[:10]}...)")
+else:
+    print("❌ ERROR: Gemini API Key is MISSING. Check your .env file!")
+
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -199,24 +204,32 @@ async def predict_yield(data: CropInput):
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
 
-        active_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+        active_models = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
         
         for model_name in active_models:
             try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(GEMINI_API_KEY)}"
+                print(f"⏳ Contacting Gemini API ({model_name})...")
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
                 req = urllib.request.Request(
                     url, 
                     data=json.dumps(payload).encode('utf-8'), 
-                    headers={'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY}
+                    headers={
+                        'Content-Type': 'application/json',
+                        'x-goog-api-key': GEMINI_API_KEY
+                    }
                 )
-                with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
+                with urllib.request.urlopen(req, timeout=12, context=ctx) as response:
                     res_data = json.loads(response.read().decode('utf-8'))
                     if 'candidates' in res_data and len(res_data['candidates']) > 0:
                         generated_text = res_data['candidates'][0]['content']['parts'][0]['text']
                         insight = generated_text.replace("*", "").strip()
+                        print(f"✅ Gemini Insight Generated Successfully using {model_name}!")
                         break
+            except urllib.error.HTTPError as e:
+                error_body = e.read().decode('utf-8', errors='ignore')
+                print(f"⚠️ {model_name} HTTP Error {e.code}: {error_body}")
             except Exception as e:
-                print(f"Gemini API Error ({model_name}): {e}")
+                print(f"❌ Gemini REST API Error ({model_name}): {e}")
 
     if data.lang != "en":
         insight = live_translate(insight, data.lang)
