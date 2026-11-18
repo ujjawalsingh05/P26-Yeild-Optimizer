@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -14,7 +14,7 @@ import ssl
 import tensorflow as tf
 from gtts import gTTS
 from dotenv import load_dotenv
-import pandas as pd  # <-- Added pandas for FAOSTAT CSV
+import pandas as pd
 
 # 1. FORCE EXACT PATH TO .env FILE
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -135,6 +135,19 @@ async def predict_yield(data: CropInput):
             lstm_pred = 0.0
     else:
         lstm_pred = 0.0
+
+    # --- 1. FAOSTAT BASELINE & EXTREME EDGE CASE CLAMPING ---
+    # If critical agronomy parameters are near zero, clamp predictions to prevent hallucinations
+    if data.Fertilizer < 2 or data.N < 2 or data.P < 2 or data.K < 2:
+        rf_pred = min(rf_pred, 0.4)
+        xgb_pred = min(xgb_pred, 0.4)
+        lstm_pred = min(lstm_pred, 0.4)
+    else:
+        # FAOSTAT Baseline Cap for realistic field conditions (normal yields rarely exceed 6.5 t/ha)
+        faostat_cap = 6.5
+        rf_pred = min(rf_pred, faostat_cap)
+        xgb_pred = min(xgb_pred, faostat_cap)
+        lstm_pred = min(lstm_pred, faostat_cap)
     
     # Dynamically select the highest-performing model
     predictions = {
@@ -146,7 +159,7 @@ async def predict_yield(data: CropInput):
     recommended_model = max(valid_preds, key=valid_preds.get) if valid_preds else "Random Forest"
     predicted_value = predictions[recommended_model]
 
-    # --- 1. ICAR / SHC RULE ENGINE & FAOSTAT BASELINE ---
+    # --- 2. ICAR / SHC RULE ENGINE & FAOSTAT BASELINE ---
     shc_alert = ""
     faostat_context = ""
     
@@ -168,7 +181,10 @@ async def predict_yield(data: CropInput):
         faostat_context = f"This forecast is {abs(yield_difference)} t/ha {'higher' if yield_difference > 0 else 'lower'} than the Indian national wheat average of {india_avg} t/ha."
 
         # Evaluate live sliders against real ICAR thresholds
-        if data.N < shc_data["macronutrients"]["Nitrogen_N"]["critical_min_kg_ha"]:
+        if data.Fertilizer < 10:
+            insight = "CRITICAL ALERT: Fertilizer application is dangerously low."
+            shc_alert = insight
+        elif data.N < shc_data["macronutrients"]["Nitrogen_N"]["critical_min_kg_ha"]:
             insight = shc_data["macronutrients"]["Nitrogen_N"]["deficiency_alert"]
             shc_alert = insight
         elif data.P < shc_data["macronutrients"]["Phosphorus_P"]["critical_min_kg_ha"]:
@@ -185,23 +201,30 @@ async def predict_yield(data: CropInput):
             
     except Exception as e:
         print(f"Data Reference Error (Proceeding with safe defaults): {e}")
-        # Safe default if the files haven't been created yet
-        if data.N < 50:
+        if data.Fertilizer < 10:
+            insight = "Fertilizer levels are dangerously low. Increase application."
+        elif data.N < 50:
             insight = "Nitrogen levels are dangerously low. Consider immediate application of Urea."
         elif data.temp > 35:
             insight = "High heat stress detected. Ensure adequate and frequent irrigation."
         else:
             insight = "Soil nutrients and temperature are optimal for maximum yield."
 
-    # --- 2. GEMINI AI (Updated with Real Context Grounding) ---
+    # --- 3. GEMINI AI (Updated with Rich Context & SHC Rules) ---
     if GEMINI_API_KEY:
         prompt = (
-            f"You are an expert AI agronomist. A farmer has soil with Nitrogen={data.N} kg/ha, "
-            f"Phosphorus={data.P} kg/ha, Potassium={data.K} kg/ha, Temperature={data.temp}°C, and applied {data.Fertilizer}kg/ha of fertilizer. "
-            f"The AI predicted a yield of {predicted_value} t/ha. {faostat_context} "
-            f"RULE ENGINE ALERT: {shc_alert} "
-            f"Based strictly on this data, provide a concise, highly actionable 2-sentence recommendation "
-            f"to optimize or protect this yield. Reply in plain text only. Do not use asterisks, markdown, or bullet points."
+            f"Act as an expert agricultural scientist for Indian farming systems (KisanPulse). "
+            f"Current Soil & Agronomy Parameters: "
+            f"- Nitrogen (N): {data.N} kg/ha "
+            f"- Phosphorus (P): {data.P} kg/ha "
+            f"- Potassium (K): {data.K} kg/ha "
+            f"- Temperature: {data.temp}°C "
+            f"- Fertilizer: {data.Fertilizer} kg/ha "
+            f"- Predicted Optimal Yield: {predicted_value} t/ha ({recommended_model} model). {faostat_context} "
+            f"System Status Check / Alert: {shc_alert if shc_alert else 'Conditions are stable and well-balanced.'} "
+            f"Provide a rich, highly professional optimization strategy (3 to 4 sentences) for the farmer. "
+            f"If there is a System Alert, focus the advice directly on practical remedial actions or fertilizer adjustments. "
+            f"Reply in plain text only. Do not use asterisks, markdown, or bullet points."
         )
         
         payload = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -241,7 +264,7 @@ async def predict_yield(data: CropInput):
             except Exception as e:
                 print(f"❌ Gemini REST API Error ({model_name}): {e}")
 
-    # --- 3. Live translate the insight if Hindi ('hi') or Punjabi ('pa') is selected ---
+    # --- 4. Live translate the insight if Hindi ('hi') or Punjabi ('pa') is selected ---
     if data.lang != "en":
         insight = live_translate(insight, data.lang)
 
@@ -252,7 +275,7 @@ async def predict_yield(data: CropInput):
         "all_predictions": {
             "random_forest": rf_pred,
             "xgboost": xgb_pred,
-            "lstm": lstm_pred if lstm_pred > 0 else "Offline",
+            "lstm": lstm_pred if lstm_pred > 0 else 0.0,
             "recommended_model": recommended_model
         }
     }
